@@ -1,0 +1,17 @@
+(function(){
+  window['optimizely'] = window['optimizely'] || [];
+  window['optimizely'].push(['activateGeoDelayedExperiments', {
+    'location':{
+      'city': "CHENNAI",
+      'continent': "AS",
+      'country': "IN",
+      'region': "TN",
+      'dma': ""
+    },
+    'ip':"171.79.48.70"
+  }]);
+})
+
+()
+
+;

@@ -1,0 +1,151 @@
+const readCookie = (key) => {
+  const cookies = document.cookie.split("; ");
+  for (const cookie of cookies) {
+    const [cookieKey, cookieValue] = cookie.split("=");
+    if (cookieKey === key) {
+      return JSON.parse(cookieValue);
+    }
+  }
+  return null;
+};
+
+const getGeoIp = async () => {
+  return await fetch("https://location-services-prd.tesla.com/geoip/city").then((res) =>
+    res.json(),
+  );
+};
+
+const getStateProvince = async () => {
+  // read device location cookie
+  const deviceLocation = readCookie("device_location");
+  if (deviceLocation?.region?.regionCode) {
+    return deviceLocation.region.regionCode;
+  }
+
+  // read Ip info cookie
+  const ipInfo = readCookie("ip_info");
+  if (ipInfo?.region?.regionCode) {
+    return ipInfo?.region.regionCode;
+  }
+
+  // make city call
+  const geoIpData = await getGeoIp();
+  return geoIpData?.subdivisions[0]?.iso_code || "";
+};
+
+const loadChatScriptsAndStyles = async () => {
+  const stateProvince = await getStateProvince();
+  fetch("/conversation/get-chat-init-configs", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      locale: getLocale(),
+      stateProvince: stateProvince ?? "",
+    }),
+  })
+    .then((res) => res.json())
+    .then((res) => {
+      const LD = res.LDChatConfigurations;
+      const isNonTasEnabled = LD.isChatLite || LD.triage;
+      if (!LD.isMobile && window.screen.width <= 599) return;
+
+      const params = new URLSearchParams(window.location.search);
+      const isForceBRChatEnabled = params.get("forceBRChat") === "true";
+
+      // Temp till MK TAS downstream is figured out: Disable chat on US homepage if not BR
+      const isUSHomePage = window.location.pathname === "/";
+      if (isUSHomePage) {
+        if (LD.teslaAssistBREnabled || isForceBRChatEnabled) {
+          loadNewChat();
+        }
+        return;
+      }
+
+      // Temp for NL BR Demo
+      const isNLDrivePage = window.location.pathname.toLowerCase().includes("/nl_nl/drive");
+
+      if (LD.teslaAssistFlag || (isForceBRChatEnabled && isNLDrivePage)) {
+        loadNewChat();
+      } else if (isNonTasEnabled) {
+        loadOldChat();
+      }
+    })
+    .catch(() => {
+      throw new Error("[Chat Loader] Error getting chat configs ");
+    });
+};
+
+const getLocale = () => {
+  const url = window.location.pathname;
+  const regex = /\/(?<language>[a-zA-Z]{2})_(?<country>[a-zA-Z]{2})\//;
+  const match = url.match(regex);
+
+  const locale = match
+    ? `${match.groups.language.toLowerCase()}_${match.groups.country.toLowerCase()}`
+    : "en_us";
+  return locale;
+};
+
+const loadOldChat = () => {
+  const script = document.createElement("script");
+  script.src = "/cua/assets/apps/oceana/chat-ui.js";
+  script.async = true;
+
+  const style = document.createElement("link");
+  style.href = "/cua/assets/apps/oceana/chat-ui.css";
+  style.rel = "stylesheet";
+
+  document.body.appendChild(script);
+  document.body.appendChild(style);
+
+  let attempts = 0;
+  const CHECK_INTERVAL = 500;
+  const MAX_ATTEMPTS = 10;
+  const checkChatLoadedInterval = setInterval(() => {
+    attempts++;
+    if (window?.avaya?.init_chat) {
+      window.avaya.init_chat();
+      clearInterval(checkChatLoadedInterval);
+    } else if (attempts >= MAX_ATTEMPTS) {
+      clearInterval(checkChatLoadedInterval);
+    }
+  }, CHECK_INTERVAL);
+};
+
+const loadNewChat = () => {
+  const isProd = window.location.origin === "https://www.tesla.com";
+  const chatBaseUrl = `https://cua-chat-ui${isProd ? "" : "-stage"}.tesla.com/dist`;
+  fetch(`${chatBaseUrl}/.vite/manifest.json`)
+    .then((res) => {
+      if (!res.ok) {
+        throw new Error("[Chat Loader] error fetching manifest.json");
+      }
+      return res.json();
+    })
+    .then((res) => {
+      if (res["index.html"]) {
+        const script = document.createElement("script");
+        script.src = `${chatBaseUrl}/${res["index.html"]["file"]}`;
+        script.type = "module";
+        script.async = true;
+
+        const style = document.createElement("link");
+        style.href = `${chatBaseUrl}/${res["index.html"]["css"][0]}`;
+        style.rel = "stylesheet";
+
+        document.body.appendChild(script);
+        document.body.appendChild(style);
+      }
+    })
+    .catch(() => {
+      throw new Error("[Chat Loader] error fetching manifest.json");
+    });
+};
+
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", loadChatScriptsAndStyles);
+} else {
+  loadChatScriptsAndStyles();
+}
